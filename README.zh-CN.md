@@ -241,7 +241,9 @@ herdr plugin action invoke kosukeyano.remote-download.upload
 如果连接时显示 `remote port forwarding failed for listen path`，请先运行
 上面所示的 `rm -f`命令，然后重新连接。
 
-如果传输过程中 SSH 隧道断开，选择文件后三秒内会在选择器中显示失败原因。
+如果传输过程中 SSH 隧道断开，选择文件后会在选择器中显示失败原因：隧道已断开时
+约 1 秒，无响应时约 20 秒。在丢包的网络中，空闲隧道的首次响应可能较慢，因此会
+自动重试一次连接检查。
 按 Esc 或 Enter 关闭，然后重新连接 Herdr。
 
 ## 开发

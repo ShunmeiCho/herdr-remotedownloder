@@ -300,8 +300,10 @@ herdr plugin action invoke kosukeyano.remote-download.upload
 
 接続時に `remote port forwarding failed for listen path` と表示された場合は、
 上記の `rm -f`を実行してから再接続してください。
-転送中にSSHトンネルが失われた場合は、ファイル選択後3秒以内にpickerへ失敗理由を
-表示します。EscまたはEnterで閉じてください。
+転送中にSSHトンネルが失われた場合は、ファイル選択後にpickerへ失敗理由を表示します。
+トンネルが切れていれば約1秒、応答がなければ約20秒で表示されます。
+パケットロスのあるネットワークではアイドル後の最初の応答が遅れることがあるため、
+接続確認を1回だけ自動で再試行します。EscまたはEnterで閉じてください。
 LaunchAgentのトンネルを使う場合は約1分後に再試行してください。接続試行はログに
 時刻付きで記録されます。手動セットアップの場合はHerdrを再接続してください。
 

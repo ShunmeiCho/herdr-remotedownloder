@@ -24,7 +24,7 @@ pub const PLUGIN_ID: &str = "kosukeyano.remote-download";
 pub const DEFAULT_PORT: u16 = 18_340;
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
-pub const PREFLIGHT_TIMEOUT_SECONDS: u64 = 3;
+pub const PREFLIGHT_TIMEOUT_SECONDS: u64 = 10;
 pub const TRANSFER_PATH: &str = "/v1/files";
 pub const CHOOSE_FILE_PATH: &str = "/v1/choose-file";
 pub const LAUNCHD_LABEL: &str = "com.kosukeyano.herdr-remote-download";
@@ -38,6 +38,7 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const BATCH_CONTENT_TYPE: &str = "application/x-herdr-file-batch";
+const PREFLIGHT_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub enum ReceiverEndpoint {
@@ -665,21 +666,34 @@ pub fn check_receiver(endpoint: &ReceiverEndpoint, timeout_seconds: u64) -> Resu
     if timeout_seconds == 0 {
         bail!("transfer timeout must be greater than zero");
     }
-    let timeout = Duration::from_secs(timeout_seconds.min(PREFLIGHT_TIMEOUT_SECONDS));
+    let wait = timeout_seconds.min(PREFLIGHT_TIMEOUT_SECONDS);
     let display = endpoint.display();
-    let unavailable = || {
-        anyhow!(
-            "local receiver is unavailable through {display}: the SSH tunnel from the Mac is not \
-             connected. Retry in about a minute while it reconnects (with the manual setup, \
-             reconnect Herdr)"
-        )
+    // Packet loss can stall the first request through an idle tunnel for
+    // several seconds, so one failed probe is retried before giving up.
+    let probe = || request_health(endpoint, Duration::from_secs(wait));
+    let response = match probe() {
+        Ok(response) => response,
+        Err(_) => {
+            thread::sleep(PREFLIGHT_RETRY_DELAY);
+            probe().map_err(|error| {
+                if is_timeout(&error) {
+                    anyhow!(
+                        "local receiver is unavailable through {display}: the SSH tunnel from \
+                         the Mac did not answer within {wait}s, twice. The network to the Mac \
+                         may be slow; retry in a moment (if it keeps failing, retry in about a \
+                         minute while the tunnel reconnects, or with the manual setup, \
+                         reconnect Herdr)"
+                    )
+                } else {
+                    anyhow!(
+                        "local receiver is unavailable through {display}: the SSH tunnel from \
+                         the Mac is not connected. Retry in about a minute while it reconnects \
+                         (with the manual setup, reconnect Herdr)"
+                    )
+                }
+            })?
+        }
     };
-    let mut stream = connect_endpoint(endpoint, timeout).map_err(|_| unavailable())?;
-    stream
-        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .and_then(|_| stream.flush())
-        .map_err(|_| unavailable())?;
-    let response = read_http_response(stream.as_mut(), 16 * 1024).map_err(|_| unavailable())?;
     let payload: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
     if response.status != 200
         || payload.get("service").and_then(Value::as_str) != Some("herdr-remote-download")
@@ -691,6 +705,24 @@ pub fn check_receiver(endpoint: &ReceiverEndpoint, timeout_seconds: u64) -> Resu
         );
     }
     Ok(())
+}
+
+fn request_health(endpoint: &ReceiverEndpoint, timeout: Duration) -> Result<HttpResponse> {
+    let mut stream = connect_endpoint(endpoint, timeout)?;
+    stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    stream.flush()?;
+    read_http_response(stream.as_mut(), 16 * 1024)
+}
+
+fn is_timeout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            )
+        })
+    })
 }
 
 pub fn upload_file(
@@ -2391,7 +2423,42 @@ mod tests {
             1024,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("local receiver is unavailable"));
+        let detail = format!("{error:#}");
+        assert!(detail.contains("local receiver is unavailable"), "{detail}");
+        assert!(detail.contains("is not connected"), "{detail}");
+    }
+
+    #[test]
+    fn silent_receiver_is_reported_as_slow() {
+        // The kernel accepts connections on a bound listener even though
+        // nothing calls accept(), so the probe connects and then times out.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let endpoint = ReceiverEndpoint::Tcp {
+            host: "127.0.0.1".to_string(),
+            port: listener.local_addr().unwrap().port(),
+        };
+        let detail = format!("{:#}", check_receiver(&endpoint, 1).unwrap_err());
+        assert!(
+            detail.contains("did not answer within 1s, twice"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn receiver_check_retries_after_a_dropped_probe() {
+        let root = TestDirectory::new();
+        let server = test_server(&root.path, &"ab".repeat(32));
+        let port = server.local_port().unwrap();
+        let handle = thread::spawn(move || {
+            drop(server.listener.accept().unwrap());
+            server.serve_count(1).unwrap();
+        });
+        let endpoint = ReceiverEndpoint::Tcp {
+            host: "127.0.0.1".to_string(),
+            port,
+        };
+        check_receiver(&endpoint, 5).unwrap();
+        handle.join().unwrap();
     }
 
     #[test]

@@ -308,7 +308,10 @@ If the connection reports `remote port forwarding failed for listen path`, run
 the `rm -f` command shown above and reconnect.
 
 If the SSH tunnel is lost during a transfer, the picker displays the failure
-within three seconds of selecting the file. Press Esc or Enter to close it.
+after you select the file: within about a second when the tunnel is down, or
+within about 20 seconds when it does not answer. On a lossy network the first
+answer through an idle tunnel can be slow, so the check is retried once
+automatically. Press Esc or Enter to close it.
 With the LaunchAgent tunnel, retry after about a minute; each connection attempt
 is timestamped in its log. With the manual setup, reconnect Herdr.
 
