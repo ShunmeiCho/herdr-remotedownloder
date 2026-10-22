@@ -70,9 +70,11 @@ script saves `~/.ssh/config` and `~/.zshrc` with a
 ### Connecting with `herdr machine add`
 
 `./setup.sh mercury` installs a LaunchAgent for the transfer tunnel. It starts
-at Mac login and reconnects after SSH disconnects. Only stale, non-listening
-sockets are removed. SSH authentication must work non-interactively (load your
-key into the SSH agent if needed).
+at Mac login and reconnects after SSH disconnects. Only stale sockets are
+removed: ones nothing listens on, or ones left listening by a connection that
+dropped with the network, which do not answer a health check within 10 seconds.
+SSH authentication must work non-interactively (load your key into the SSH
+agent if needed).
 
 ```sh
 herdr machine add mercury --label "mercury"

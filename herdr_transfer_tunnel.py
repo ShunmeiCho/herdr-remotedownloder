@@ -12,26 +12,39 @@ import shutil
 import subprocess
 import sys
 
-# Probe on the remote host: never unlink a listening tunnel's socket.
+# Probe on the remote host: never unlink a working tunnel's socket. An SSH
+# session that died with the network keeps its socket listening, but the
+# request it accepts never reaches the Mac, so only a reply proves it works.
 REMOTE_PREPARE = r"""
-import errno, getpass, os, socket, stat
+import errno, getpass, os, socket, stat, sys
 p = '/tmp/herdr-remote-download-' + getpass.getuser() + '.sock'
 s = socket.socket(socket.AF_UNIX)
 s.settimeout(5)
+stale = False
 try:
     s.connect(p)
 except OSError as e:
     if e.errno == errno.ECONNREFUSED:
-        info = os.lstat(p)
-        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
-            raise RuntimeError('Refusing to remove an unowned or non-socket path')
-        os.unlink(p)
+        stale = True
     elif e.errno != errno.ENOENT:
         raise
 else:
-    raise SystemExit('Transfer tunnel already listening; leaving it untouched')
+    s.settimeout(10)
+    try:
+        s.sendall(b'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
+        stale = not s.recv(1)
+    except OSError:
+        stale = True
+    if not stale:
+        raise SystemExit('Transfer tunnel already listening; leaving it untouched')
+    print('Transfer tunnel is listening but not answering; replacing it', file=sys.stderr)
 finally:
     s.close()
+if stale:
+    info = os.lstat(p)
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError('Refusing to remove an unowned or non-socket path')
+    os.unlink(p)
 """
 
 # Runs on the remote host for the tunnel's lifetime. Exiting ends the SSH

@@ -35,6 +35,25 @@ class TunnelTests(unittest.TestCase):
                 self.assertEqual(unlink.called, removed)
                 sock.return_value.close.assert_called_once()
 
+    def test_prepare_replaces_listening_socket_that_does_not_answer(self):
+        for name, reply, removed in [('answers', [b'H'], False),
+                                     ('closes', [b''], True),
+                                     ('hangs', TimeoutError('timeout'), True)]:
+            with self.subTest(name), patch('socket.socket') as sock, \
+                    patch('os.unlink') as unlink, patch('os.lstat') as lstat, \
+                    patch('sys.stderr', io.StringIO()):
+                sock.return_value.recv.side_effect = reply
+                lstat.return_value = types.SimpleNamespace(
+                    st_mode=stat.S_IFSOCK, st_uid=tunnel.os.getuid())
+                if removed:
+                    exec(tunnel.REMOTE_PREPARE, {})
+                else:
+                    with self.assertRaises(SystemExit):
+                        exec(tunnel.REMOTE_PREPARE, {})
+                self.assertIn(b'GET /health ', sock.return_value.sendall.call_args.args[0])
+                self.assertEqual(unlink.called, removed)
+                sock.return_value.close.assert_called_once()
+
     def test_watch_exits_when_socket_disappears_or_is_replaced(self):
         def stat_results(*inodes):
             def fake_stat(path):
