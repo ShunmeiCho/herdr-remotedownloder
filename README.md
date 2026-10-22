@@ -5,7 +5,8 @@ English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 A Herdr plugin that transfers files in both directions between a
 `herdr --remote` host and the connected Mac.
 
-Select visible file paths with hint characters, or transfer files from
+Compare highlighted conversation context with a full-path file list, select
+with arrow keys or hint characters, or transfer files from
 `file://` links displayed by Codex, Claude, and other tools. It supports regular
 files of any extension, including PDFs, PPTX files, images, and archives;
 directories are archived and extracted automatically. In
@@ -239,13 +240,29 @@ whence -w hr
 
 ## Usage
 
+### First download after setup
+
+1. Focus the remote pane containing the file reference. With Herdr's default
+   prefix, press **Ctrl+B**, release it, then press **d**. If you changed the
+   prefix, use your configured prefix followed by `d`.
+2. Match a highlighted `[hint]` in the left snapshot to the same hint and full
+   path on the right.
+3. Press Right to activate the file list, use Up/Down to choose a file, and
+   press Enter. You can also type its hint directly.
+4. By default, find the saved file in the Mac's `~/Downloads` folder; Finder
+   also reveals it. A `:line` suffix identifies a reference; the whole file
+   is downloaded.
+
 ### Select a visible file path
 
 Press `prefix+d` to open one download overlay with two views. The left view
 (about 70% of the width) is a read-only conversation snapshot. Existing paths
 are highlighted and labelled `[a]`, `[s]`, and so on without replacing path
 characters. The narrower right view lists complete resolved paths with the
-same hints. Small terminals stack the views.
+same hints. `>` marks the keyboard-focused file; `[x]` marks a file selected
+for a batch. A hint label is separate from the path, not part of its filename.
+Small terminals stack the views. If the Refresh button is hidden in a narrow
+window, Ctrl+R still works.
 
 - Left/Right or a mouse click chooses the active view.
 - In the file list, Up/Down selects a file and Enter downloads it. PageUp,
@@ -259,18 +276,22 @@ same hints. Small terminals stack the views.
 
 Esc closes the download overlay. Both views belong to the picker, so clicking
 and scrolling the snapshot does not direct keys to the original agent. The
-original pane receives focus again after the overlay closes. Opening the
-picker switches the connected Mac to an ASCII-capable input source (such as
-ABC), so hints can be typed while another input method is active.
+original pane receives focus again after the overlay closes, so subsequent
+key presses act on that original session. To close an older picker, click its
+download area first and press Esc once. During a transfer, Esc or Ctrl+C cancels
+the transfer. Opening the picker switches the connected Mac to an ASCII-capable
+input source (such as ABC), so hints can be typed while another input method is active.
 
 The snapshot and candidate list are captured once when the picker opens.
 Scrolling does not add/remove candidates or change their hints: paths outside
 the scrolled viewport remain in the list. New output from the underlying agent
 is included only when you click **Refresh** (or press Ctrl+R), or close and
 reopen the picker. Refresh reads the source pane's current visible page and
-rebuilds both views. Hints may change and pending hint input and multi-selections
-are cleared; a failed refresh keeps the old snapshot and selection. Scrolling
-alone never changes the candidates. The snapshot shows conversation text, not
+working directory, then rebuilds both views. Candidates absent from that page
+are removed; this is not a scan of the entire conversation history. Hints may
+change and pending hint input and multi-selections are cleared. A failed refresh
+keeps the old snapshot, working directory and selection. Scrolling alone never
+changes the candidates. The snapshot shows conversation text, not
 file contents.
 
 During a transfer the picker shows the file number, percentage and sent bytes.
@@ -330,6 +351,14 @@ herdr plugin action invoke kosukeyano.remote-download.upload
 - The SSH `RemoteForward` and authentication token must be configured for each remote host.
 
 ## Troubleshooting
+
+| Symptom | What to do |
+| --- | --- |
+| No candidate for a path | Ask the agent to print the complete absolute path. Relative paths are resolved from the source pane's directory; omitted directory prefixes are not searched for. |
+| New output is missing | Click Refresh or press Ctrl+R. Scrolling the snapshot does not reread the agent's terminal. |
+| `cannot read token file` | Finish the Mac receiver and token-copy setup. Installing the remote plugin alone does not pair the Mac. |
+| The old picker layout is still visible | Click that download window, press Esc once, then reopen it from the source pane. |
+| Enter reports a window-size problem | Enlarge the terminal so the selected file can be displayed. |
 
 If the connection reports `remote port forwarding failed for listen path`, run
 the `rm -f` command shown above and reconnect.
