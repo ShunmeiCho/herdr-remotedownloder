@@ -329,7 +329,9 @@ fi
 python3 "$plugin_root/herdr_remote_upload.py" configure-upload-keybinding \
     --config "$config_path"
 herdr config check
-if herdr status server >/dev/null 2>&1; then
+# `herdr status server` exits 0 even when no server is running.
+if herdr status server --json 2>/dev/null |
+    python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("running") else 1)' 2>/dev/null; then
     herdr server reload-config
 else
     printf 'Herdr server is not running; the keybindings will load on its next start.\n'
