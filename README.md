@@ -241,7 +241,9 @@ whence -w hr
 
 Press `prefix+d` to add hint characters to existing file paths on the visible
 screen. Type a hint to transfer that file to the Mac. Press Esc to close the
-picker.
+picker. Opening the picker switches the connected Mac to an ASCII-capable input
+source (such as ABC), so hints can be typed even while a Japanese or other input
+method is active.
 
 To transfer several files at once, press Tab, type the hints of each file
 (typing a hint again deselects it), then press Tab or Enter. Files are sent one

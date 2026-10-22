@@ -8,8 +8,9 @@ use herdr_remote_download::transfer::{
     configure_keybinding, context_from_environment, default_download_dir,
     default_herdr_config_path, default_remote_socket_path, default_token_path, ensure_token,
     install_service, notify_herdr, read_token, resolve_path_from_context, run_server,
-    sender_token_path, service_status, upload_file_with_progress, AfterSave, ReceiverEndpoint,
-    ServerConfig, TransferProgress, DEFAULT_MAX_BYTES, DEFAULT_PORT, DEFAULT_TIMEOUT_SECONDS,
+    select_ascii_input_source, sender_token_path, service_status, upload_file_with_progress,
+    AfterSave, ReceiverEndpoint, ServerConfig, TransferProgress, DEFAULT_MAX_BYTES, DEFAULT_PORT,
+    DEFAULT_TIMEOUT_SECONDS,
 };
 use serde_json::json;
 
@@ -109,6 +110,10 @@ enum Command {
 
     /// Report whether the receiver service is running.
     ServiceStatus,
+
+    /// Switch the Mac to an ASCII-capable input source (run by the receiver).
+    #[command(hide = true)]
+    SelectAsciiInput,
 
     /// Add the default prefix-d keybinding to a Herdr config file.
     ConfigureKeybinding {
@@ -319,6 +324,10 @@ fn run() -> Result<u8> {
             let running = service_status()?;
             println!("{}", serde_json::to_string(&json!({"running": running}))?);
             return Ok(if running { 0 } else { 1 });
+        }
+        Command::SelectAsciiInput => {
+            let switched = select_ascii_input_source()?;
+            println!("{}", serde_json::to_string(&json!({"switched": switched}))?);
         }
         Command::ConfigureKeybinding { config, key } => {
             let config = match config {

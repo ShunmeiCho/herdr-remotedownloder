@@ -27,6 +27,7 @@ pub const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 pub const PREFLIGHT_TIMEOUT_SECONDS: u64 = 10;
 pub const TRANSFER_PATH: &str = "/v1/files";
 pub const CHOOSE_FILE_PATH: &str = "/v1/choose-file";
+pub const ASCII_INPUT_PATH: &str = "/v1/ascii-input";
 pub const LAUNCHD_LABEL: &str = "com.kosukeyano.herdr-remote-download";
 pub const DOWNLOAD_ACTION: &str = "kosukeyano.remote-download.download";
 pub const PICK_ACTION: &str = "kosukeyano.remote-download.pick";
@@ -725,6 +726,31 @@ fn is_timeout(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Ask the Mac to switch to an ASCII-capable input source, so that hint keys
+/// reach the picker instead of a Japanese or other IME.
+pub fn request_ascii_input(
+    endpoint: &ReceiverEndpoint,
+    token: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let token = validate_token(token)?;
+    let mut stream = connect_endpoint(endpoint, timeout)?;
+    write!(
+        stream,
+        "POST {ASCII_INPUT_PATH} HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         Authorization: Bearer {token}\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\r\n"
+    )?;
+    stream.flush()?;
+    let response = read_http_response(stream.as_mut(), MAX_RESPONSE_BYTES)?;
+    if response.status != 200 {
+        bail!("receiver returned HTTP {}", response.status);
+    }
+    Ok(())
+}
+
 pub fn upload_file(
     path: &Path,
     endpoint: &ReceiverEndpoint,
@@ -864,6 +890,7 @@ pub struct ServerConfig {
 pub struct DownloadServer {
     listener: TcpListener,
     config: ServerConfig,
+    select_ascii_input: fn() -> Result<bool>,
 }
 
 impl DownloadServer {
@@ -874,6 +901,7 @@ impl DownloadServer {
         Ok(Self {
             listener,
             config: ServerConfig { token, ..config },
+            select_ascii_input: select_ascii_input_in_child,
         })
     }
 
@@ -944,11 +972,12 @@ impl DownloadServer {
                     "service": "herdr-remote-download",
                     "status": "ok",
                     "destination": self.config.destination.to_string_lossy(),
-                    "capabilities": ["download", "upload"],
+                    "capabilities": ["download", "upload", "ascii-input"],
                 }),
             ),
             ("POST", TRANSFER_PATH) => self.receive_upload(&mut reader, &headers),
             ("POST", CHOOSE_FILE_PATH) => self.send_chosen_file(&mut reader, &headers, picker),
+            ("POST", ASCII_INPUT_PATH) => self.switch_to_ascii_input(&mut reader, &headers),
             _ => write_json_response(
                 reader.get_mut(),
                 404,
@@ -1201,6 +1230,36 @@ impl DownloadServer {
         }
     }
 
+    fn switch_to_ascii_input<S: Read + Write>(
+        &self,
+        reader: &mut BufReader<&mut S>,
+        headers: &HashMap<String, String>,
+    ) -> Result<()> {
+        let expected = format!("Bearer {}", self.config.token);
+        let provided = headers
+            .get("authorization")
+            .map(String::as_str)
+            .unwrap_or("");
+        if !constant_time_eq(expected.as_bytes(), provided.as_bytes()) {
+            return write_json_response(
+                reader.get_mut(),
+                401,
+                "Unauthorized",
+                &json!({"error": "unauthorized"}),
+            );
+        }
+        if headers.get("content-length").map(String::as_str) != Some("0") {
+            return write_json_response(
+                reader.get_mut(),
+                400,
+                "Bad Request",
+                &json!({"error": "Content-Length must be zero"}),
+            );
+        }
+        let switched = (self.select_ascii_input)()?;
+        write_json_response(reader.get_mut(), 200, "OK", &json!({"switched": switched}))
+    }
+
     fn write_file_batch_response<W: Write>(&self, stream: &mut W, paths: &[PathBuf]) -> Result<()> {
         let mut files = Vec::with_capacity(paths.len());
         let mut content_length = 0_u64;
@@ -1364,6 +1423,78 @@ fn choose_file_on_mac() -> Result<Vec<PathBuf>> {
             Ok(path)
         })
         .collect()
+}
+
+/// The receiver keeps seeing the input source it first read, so every request
+/// runs `select-ascii-input` in a fresh copy of the binary.
+fn select_ascii_input_in_child() -> Result<bool> {
+    let output = Command::new(env::current_exe().context("cannot locate the receiver binary")?)
+        .arg("select-ascii-input")
+        .stdin(Stdio::null())
+        .output()
+        .context("cannot start the input source switcher")?;
+    if !output.status.success() {
+        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    let result: Value = serde_json::from_slice(&output.stdout)
+        .context("input source switcher returned invalid output")?;
+    Ok(result.get("switched").and_then(Value::as_bool) == Some(true))
+}
+
+/// Select the most recently used ASCII-capable input source (such as ABC)
+/// unless the current one already types ASCII. Returns whether it switched.
+/// Call it on the main thread of a short-lived process: recent macOS aborts
+/// these calls off the main thread, and a long-running process keeps reading
+/// a stale current input source.
+#[cfg(target_os = "macos")]
+pub fn select_ascii_input_source() -> Result<bool> {
+    use std::ffi::c_void;
+
+    type CFTypeRef = *const c_void;
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        static kTISPropertyInputSourceIsASCIICapable: CFTypeRef;
+        fn TISCopyCurrentKeyboardInputSource() -> CFTypeRef;
+        fn TISCopyCurrentASCIICapableKeyboardInputSource() -> CFTypeRef;
+        fn TISGetInputSourceProperty(source: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+        fn TISSelectInputSource(source: CFTypeRef) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFBooleanGetValue(boolean: CFTypeRef) -> u8;
+        fn CFRelease(value: CFTypeRef);
+    }
+
+    // SAFETY: the Copy functions return owned references or null, each is
+    // released once, and the property is a borrowed CFBoolean or null.
+    unsafe {
+        let current = TISCopyCurrentKeyboardInputSource();
+        if !current.is_null() {
+            let capable = TISGetInputSourceProperty(current, kTISPropertyInputSourceIsASCIICapable);
+            let ascii = !capable.is_null() && CFBooleanGetValue(capable) != 0;
+            CFRelease(current);
+            if ascii {
+                return Ok(false);
+            }
+        }
+        let ascii = TISCopyCurrentASCIICapableKeyboardInputSource();
+        if ascii.is_null() {
+            bail!("no ASCII-capable input source is enabled on this Mac");
+        }
+        let status = TISSelectInputSource(ascii);
+        CFRelease(ascii);
+        if status != 0 {
+            bail!("macOS could not select the ASCII input source (OSStatus {status})");
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn select_ascii_input_source() -> Result<bool> {
+    bail!("switching the input source requires macOS")
 }
 
 pub fn run_server(config: ServerConfig) -> Result<()> {
@@ -2228,6 +2359,31 @@ mod tests {
         let response = read_http_response(&mut stream, MAX_RESPONSE_BYTES).unwrap();
         handle.join().unwrap();
         assert_eq!(response.status, 401);
+    }
+
+    #[test]
+    fn ascii_input_switches_only_with_authentication() {
+        static SWITCHES: AtomicU64 = AtomicU64::new(0);
+        let root = TestDirectory::new();
+        let token = "ab".repeat(32);
+        let mut server = test_server(&root.path, &token);
+        server.select_ascii_input = || {
+            SWITCHES.fetch_add(1, Ordering::Relaxed);
+            Ok(true)
+        };
+        let port = server.local_port().unwrap();
+        let handle = thread::spawn(move || server.serve_count(2).unwrap());
+        let endpoint = ReceiverEndpoint::Tcp {
+            host: "127.0.0.1".to_string(),
+            port,
+        };
+
+        let rejected = request_ascii_input(&endpoint, &"cd".repeat(32), Duration::from_secs(5));
+        assert!(rejected.unwrap_err().to_string().contains("401"));
+        assert_eq!(SWITCHES.load(Ordering::Relaxed), 0);
+        request_ascii_input(&endpoint, &token, Duration::from_secs(5)).unwrap();
+        handle.join().unwrap();
+        assert_eq!(SWITCHES.load(Ordering::Relaxed), 1);
     }
 
     #[test]

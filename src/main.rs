@@ -9,7 +9,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use herdr_remote_download::transfer::{notify_herdr, TransferProgress};
+use herdr_remote_download::transfer::{
+    default_remote_socket_path, notify_herdr, read_token, request_ascii_input, sender_token_path,
+    ReceiverEndpoint, TransferProgress,
+};
 use herdr_remote_download::{file_matcher, filter_existing_file_targets};
 use herdr_tiny_fingers::app::{App, Outcome};
 use herdr_tiny_fingers::herdr_client::SocketClient;
@@ -31,6 +34,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    switch_mac_to_ascii_input();
     let socket_path = std::env::var_os("HERDR_SOCKET_PATH")
         .context("HERDR_SOCKET_PATH is not set; open this through the Herdr plugin action")?;
     let (pane_id, pane_cwd) = focused_pane_context()?;
@@ -131,6 +135,24 @@ fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Hints are typed as letters, which a Japanese IME on the Mac would capture.
+/// Best effort in the background: an older receiver or a slow tunnel must not
+/// delay the picker.
+fn switch_mac_to_ascii_input() {
+    thread::spawn(|| -> Result<()> {
+        let socket = match std::env::var_os("HERDR_DOWNLOAD_SOCKET") {
+            Some(path) => PathBuf::from(path),
+            None => default_remote_socket_path()?,
+        };
+        let token = read_token(&sender_token_path()?)?;
+        request_ascii_input(
+            &ReceiverEndpoint::Unix(socket),
+            &token,
+            Duration::from_secs(5),
+        )
+    });
 }
 
 fn focused_pane_context() -> Result<(String, PathBuf)> {
