@@ -601,6 +601,43 @@ mod tests {
         area_rows(terminal, Block::bordered().inner(picker.files_area))
     }
 
+    fn assert_rendered_file(
+        terminal: &Terminal<TestBackend>,
+        picker: &Picker,
+        app: &App,
+        index: usize,
+        expected: &str,
+    ) {
+        let (rows, files) = picker.file_layout(app, picker.file_width);
+        let file = files
+            .iter()
+            .find(|file| file.target_index == index)
+            .expect("target belongs to the filtered catalog");
+        // A real temp path can span multiple terminal rows (especially under
+        // macOS TMPDIR). Reconstruct all of it without removing filename spaces.
+        let rendered = rows[file.start..file.end]
+            .iter()
+            .flat_map(|row| row.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert_eq!(rendered, expected);
+
+        // Also inspect TestBackend, including the separately rendered hint.
+        // Paths taller than the viewport need not be visible in their entirety.
+        assert!(file.start >= picker.scroll);
+        assert!(file.start < picker.scroll + picker.page_height);
+        let screen = file_rows(terminal, picker);
+        for row in file.start..file.end.min(picker.scroll + picker.page_height) {
+            let expected_row = rows[row]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            let actual_row = &screen[row - picker.scroll];
+            assert!(actual_row.starts_with(&expected_row));
+            assert!(actual_row[expected_row.len()..].chars().all(|c| c == ' '));
+        }
+    }
+
     fn assert_focused_file_visible(picker: &Picker) {
         let file = picker
             .visible_files
@@ -650,7 +687,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(260, 12)).unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         let screen = screen_rows(&terminal).join("\n");
-        assert!(screen.contains(&format!("[a] {}/RESULTS.md", directory.0.display())));
+        assert_rendered_file(
+            &terminal,
+            &picker,
+            &app,
+            0,
+            &format!("> [a] {}/RESULTS.md", directory.0.display()),
+        );
         assert!(screen.contains("Files -> Mac Downloads"));
         assert!(screen.contains("Conversation snapshot"));
         assert!(!file_rows(&terminal, &picker)
@@ -708,7 +751,7 @@ mod tests {
 
     #[test]
     fn scrolling_exposes_later_files_without_reassigning_their_hints() {
-        let (_directory, mut app, mut picker) = fixture(40);
+        let (directory, mut app, mut picker) = fixture(40);
         let mut terminal = Terminal::new(TestBackend::new(260, 8)).unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         assert!(!file_rows(&terminal, &picker)
@@ -719,31 +762,48 @@ mod tests {
         assert_eq!(key(&mut picker, &mut app, KeyCode::Up), Outcome::Continue);
         assert_eq!(picker.focused_target, Some(0));
         assert_eq!(picker.scroll, 0);
+        key(&mut picker, &mut app, KeyCode::Down);
+        assert_eq!(picker.focused_target, Some(1));
+        assert_eq!(
+            key(&mut picker, &mut app, KeyCode::PageUp),
+            Outcome::Continue
+        );
+        assert_eq!(picker.focused_target, Some(0));
+        assert_eq!(picker.scroll, 0);
         while picker.focused_target != Some(39) {
             key(&mut picker, &mut app, KeyCode::PageDown);
         }
+        key(&mut picker, &mut app, KeyCode::Home);
+        assert_eq!(picker.focused_target, Some(0));
+        assert_eq!(picker.scroll, 0);
+        key(&mut picker, &mut app, KeyCode::End);
+        assert_eq!(picker.focused_target, Some(39));
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         let last = &app.targets[39];
-        assert!(screen_rows(&terminal)
-            .join("\n")
-            .contains(&format!("[{}] {}", last.hint, picker.paths[39])));
+        assert_rendered_file(
+            &terminal,
+            &picker,
+            &app,
+            39,
+            &format!(
+                "> [{}] {}",
+                last.hint,
+                directory.0.join("result-39.md").display()
+            ),
+        );
         let hint = last.hint.clone();
         let mut outcome = Outcome::Continue;
         for character in hint.chars() {
             outcome = key(&mut picker, &mut app, KeyCode::Char(character));
         }
         assert_eq!(outcome, Outcome::Copy("result-39.md".to_string()));
-        key(&mut picker, &mut app, KeyCode::PageUp);
-        assert!(picker.scroll < picker.row_count - picker.page_height);
-        key(&mut picker, &mut app, KeyCode::Home);
-        assert_eq!(picker.scroll, 0);
     }
 
     #[test]
     fn resizing_clamps_scroll_and_preserves_the_last_target_hint() {
-        let (_directory, mut app, mut picker) = fixture(40);
+        let (directory, mut app, mut picker) = fixture(40);
         let hint = app.targets[39].hint.clone();
-        let displayed_target = format!("> [{hint}] {}", picker.paths[39]);
+        let displayed_target = format!("> [{hint}] {}", directory.0.join("result-39.md").display());
         let mut terminal = Terminal::new(TestBackend::new(36, 8)).unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         key(&mut picker, &mut app, KeyCode::End);
@@ -754,37 +814,30 @@ mod tests {
         terminal.autoresize().unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         assert!(picker.scroll < narrow_scroll);
-        assert_eq!(picker.scroll, picker.row_count - picker.page_height);
-        assert!(screen_rows(&terminal)
-            .join("\n")
-            .contains(&displayed_target));
+        let last = picker.visible_files.last().unwrap();
+        if last.end - last.start <= picker.page_height {
+            assert_eq!(picker.scroll + picker.page_height, picker.row_count);
+        } else {
+            assert_eq!(picker.scroll, last.start);
+        }
+        assert_rendered_file(&terminal, &picker, &app, 39, &displayed_target);
 
         terminal.backend_mut().resize(36, 8);
         terminal.autoresize().unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         key(&mut picker, &mut app, KeyCode::End);
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
-        let screen = file_rows(&terminal, &picker)
-            .iter()
-            .map(|row| row.trim_end())
-            .collect::<String>();
-        assert!(screen.contains(&format!("> [{hint}]")));
+        assert_rendered_file(&terminal, &picker, &app, 39, &displayed_target);
         assert_eq!(picker.focused_target, Some(39));
         assert_eq!(
             key(&mut picker, &mut app, KeyCode::Enter),
             Outcome::Copy("result-39.md".to_string())
         );
-        let mut outcome = Outcome::Continue;
-        for character in hint.chars() {
-            outcome = key(&mut picker, &mut app, KeyCode::Char(character));
-            terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
-        }
-        assert_eq!(outcome, Outcome::Copy("result-39.md".to_string()));
     }
 
     #[test]
     fn multi_selection_marks_paths_and_enter_sends_original_selection_order() {
-        let (_directory, mut app, mut picker) = fixture(3);
+        let (directory, mut app, mut picker) = fixture(3);
         let first = app.targets[0].hint.clone();
         let last = app.targets[2].hint.clone();
         assert_eq!(key(&mut picker, &mut app, KeyCode::Tab), Outcome::Continue);
@@ -798,10 +851,33 @@ mod tests {
         }
         let mut terminal = Terminal::new(TestBackend::new(260, 12)).unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
-        let screen = screen_rows(&terminal).join("\n");
-        assert!(screen.contains(&format!("[{first}] [x] {}", picker.paths[0])));
-        assert!(screen.contains(&format!("[{last}] [x] {}", picker.paths[2])));
-        assert!(screen.contains("Tab/Enter:download"));
+        key(&mut picker, &mut app, KeyCode::Home);
+        terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
+        assert_rendered_file(
+            &terminal,
+            &picker,
+            &app,
+            0,
+            &format!(
+                "> [{first}] [x] {}",
+                directory.0.join("result-00.md").display()
+            ),
+        );
+        key(&mut picker, &mut app, KeyCode::End);
+        terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
+        assert_rendered_file(
+            &terminal,
+            &picker,
+            &app,
+            2,
+            &format!(
+                "> [{last}] [x] {}",
+                directory.0.join("result-02.md").display()
+            ),
+        );
+        assert!(screen_rows(&terminal)
+            .join("\n")
+            .contains("Tab/Enter:download"));
         assert_eq!(
             key(&mut picker, &mut app, KeyCode::Enter),
             Outcome::Copy("result-02.md\nresult-00.md".to_string())
@@ -810,7 +886,7 @@ mod tests {
 
     #[test]
     fn hint_prefix_filters_the_list_and_release_events_do_not_select_twice() {
-        let (_directory, mut app, mut picker) = fixture(3);
+        let (directory, mut app, mut picker) = fixture(3);
         for (target, hint) in app.targets.iter_mut().zip(["aa", "as", "sa"]) {
             target.hint = hint.to_string();
         }
@@ -821,7 +897,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(260, 12)).unwrap();
         terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
         let screen = file_rows(&terminal, &picker).join("\n");
-        assert!(screen.contains(&format!("[sa] {}", picker.paths[2])));
+        assert_rendered_file(
+            &terminal,
+            &picker,
+            &app,
+            2,
+            &format!("> [sa] {}", directory.0.join("result-02.md").display()),
+        );
+        assert_eq!(picker.visible_files.len(), 1);
+        assert_eq!(picker.visible_files[0].target_index, 2);
         assert!(!screen.contains("result-00.md"));
         assert_eq!(
             picker.handle_key(
