@@ -2,6 +2,8 @@
 
 English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
+[Changes and upgrade notes](CHANGELOG.md).
+
 A Herdr plugin that transfers files in both directions between a
 `herdr --remote` host and the connected Mac.
 
@@ -264,12 +266,18 @@ for a batch. A hint label is separate from the path, not part of its filename.
 Small terminals stack the views. If the Refresh button is hidden in a narrow
 window, Ctrl+R still works.
 
+The snapshot preserves line breaks captured from the source terminal. A line
+that already filled the source pane can wrap again in the narrower snapshot
+view, so its displayed row count may increase. Scroll to read the remaining
+rows; captured lines are not joined because that could change code or prose.
+
 - Left/Right or a mouse click chooses the active view.
 - In the file list, Up/Down selects a file and Enter downloads it. PageUp,
   PageDown, Home and End move the selection and keep it visible.
 - Shift+Up/Down scrolls the focused path itself when it is taller than the
   file viewport; its hint stays pinned in the title.
-- In the conversation snapshot, those navigation keys scroll the text.
+- In the conversation snapshot, those navigation keys scroll the text. In
+  single mode, Enter shows a reminder to press Right and choose a file before downloading.
 - Typing a file's hint still downloads it directly.
 - Tab starts multi-select. Type hints or press Space on the focused file to
   toggle selections; Tab or Enter downloads the selected files in order.
@@ -277,9 +285,8 @@ window, Ctrl+R still works.
 Esc closes the download overlay. Both views belong to the picker, so clicking
 and scrolling the snapshot does not direct keys to the original agent. The
 original pane receives focus again after the overlay closes, so subsequent
-key presses act on that original session. To close an older picker, click its
-download area first and press Esc once. During a transfer, Esc or Ctrl+C cancels
-the transfer. Opening the picker switches the connected Mac to an ASCII-capable
+key presses act on that original session. During a transfer, Esc or Ctrl+C
+cancels the transfer. Opening the picker switches the connected Mac to an ASCII-capable
 input source (such as ABC), so hints can be typed while another input method is active.
 
 The snapshot and candidate list are captured once when the picker opens.
@@ -357,7 +364,6 @@ herdr plugin action invoke kosukeyano.remote-download.upload
 | No candidate for a path | Ask the agent to print the complete absolute path. Relative paths are resolved from the source pane's directory; omitted directory prefixes are not searched for. |
 | New output is missing | Click Refresh or press Ctrl+R. Scrolling the snapshot does not reread the agent's terminal. |
 | `cannot read token file` | Finish the Mac receiver and token-copy setup. Installing the remote plugin alone does not pair the Mac. |
-| The old picker layout is still visible | Click that download window, press Esc once, then reopen it from the source pane. |
 | Enter reports a window-size problem | Enlarge the terminal so the selected file can be displayed. |
 
 If the connection reports `remote port forwarding failed for listen path`, run

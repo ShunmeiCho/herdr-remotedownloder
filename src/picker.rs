@@ -98,8 +98,14 @@ impl Picker {
             return Outcome::Continue;
         }
         match key.code {
-            KeyCode::Left => self.active_panel = Panel::Context,
-            KeyCode::Right => self.active_panel = Panel::Files,
+            KeyCode::Left => {
+                self.active_panel = Panel::Context;
+                app.message = None;
+            }
+            KeyCode::Right => {
+                self.active_panel = Panel::Files;
+                app.message = None;
+            }
             KeyCode::Up | KeyCode::Down
                 if self.active_panel == Panel::Files
                     && key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -122,6 +128,9 @@ impl Picker {
                     if let Some(index) = self.focused_target {
                         return Outcome::Copy(app.targets[index].target.text.clone());
                     }
+                } else {
+                    app.message =
+                        Some("Press Right to choose a file, then Enter to download".to_string());
                 }
             }
             KeyCode::Char(' ') if app.multi_mode && self.active_panel == Panel::Files => {
@@ -264,10 +273,11 @@ impl Picker {
             && event.row < self.refresh_area.bottom()
     }
 
-    pub fn handle_mouse(&mut self, event: MouseEvent) {
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> bool {
         if self.refresh_clicked(event) {
-            return;
+            return false;
         }
+        let previous_panel = self.active_panel;
         let inside = |area: Rect| {
             event.column >= area.x
                 && event.column < area.right()
@@ -295,6 +305,7 @@ impl Picker {
                 _ => {}
             }
         }
+        self.active_panel != previous_panel
     }
 
     pub fn draw(&mut self, frame: &mut Frame<'_>, app: &App) {
@@ -484,20 +495,35 @@ impl Picker {
         } else {
             &app.input
         };
-        let action = if app.multi_mode {
-            "Space:toggle Tab/Enter:download"
+        let action = match (app.multi_mode, self.active_panel) {
+            (true, Panel::Files) => "Space:toggle Tab/Enter:download",
+            (true, Panel::Context) => "Tab/Enter:download Right:files",
+            (false, Panel::Files) => "hint/Enter:download Tab:multi",
+            (false, Panel::Context) => "hint:download Right:files Tab:multi",
+        };
+        let short_action = if app.multi_mode || self.active_panel == Panel::Files {
+            "Enter:download"
         } else {
-            "hint/Enter:download Tab:multi"
+            "Right:files"
         };
         let panel = match self.active_panel {
             Panel::Context => "context",
             Panel::Files => "files",
         };
+        let navigation = match self.active_panel {
+            Panel::Context => "Up/Down:scroll",
+            Panel::Files => "Up/Down:select",
+        };
+        let path_help = if self.active_panel == Panel::Files {
+            " Shift+Up/Down:path"
+        } else {
+            ""
+        };
         let variants = [
-            format!(" {mode} {action} Left/Right:panel Up/Down:select file/scroll snapshot PgUp/PgDn/Home/End:move Shift+Up/Down:path Ctrl+R:refresh focus:{panel} in:{input} Esc:close downloader"),
-            format!(" {action} Left/Right:panel Up/Down:select/scroll Shift+Up/Down:path Ctrl+R:refresh Esc:close"),
-            " Enter:download arrows:move Shift+Up/Down:path Ctrl+R:refresh Esc:close".to_string(),
-            " Enter:download arrows:move ^R:refresh Esc:close".to_string(),
+            format!(" {mode} {action} Left/Right:panel {navigation} PgUp/PgDn/Home/End:move{path_help} Ctrl+R:refresh focus:{panel} in:{input} Esc:close downloader"),
+            format!(" {action} Left/Right:panel {navigation}{path_help} Ctrl+R:refresh Esc:close"),
+            format!(" {short_action} arrows:move{path_help} Ctrl+R:refresh Esc:close"),
+            format!(" {short_action} arrows:move ^R:refresh Esc:close"),
         ];
         let status = app.message.clone().unwrap_or_else(|| {
             variants
@@ -962,6 +988,42 @@ mod tests {
         assert!(app.selected_hints.is_empty());
         // Both visual regions belong to this one picker; clicking source text
         // performs no Herdr operation and returns no text to the source app.
+    }
+
+    #[test]
+    fn snapshot_enter_gives_guidance_and_status_matches_the_active_panel() {
+        let (_directory, mut app, mut picker) = fixture(1);
+        let mut terminal = Terminal::new(TestBackend::new(160, 12)).unwrap();
+        terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
+        key(&mut picker, &mut app, KeyCode::Left);
+        for width in [160, 70, 50] {
+            terminal.backend_mut().resize(width, 12);
+            terminal.autoresize().unwrap();
+            terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
+            let status = screen_rows(&terminal).pop().unwrap();
+            assert!(status.contains("Right:files"));
+            assert!(!status.contains("Enter:download"));
+            assert!(!status.contains("Shift+Up/Down:path"));
+        }
+        assert_eq!(
+            key(&mut picker, &mut app, KeyCode::Enter),
+            Outcome::Continue
+        );
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Press Right to choose a file, then Enter to download")
+        );
+        key(&mut picker, &mut app, KeyCode::Right);
+        assert!(app.message.is_none());
+        terminal.draw(|frame| picker.draw(frame, &app)).unwrap();
+        assert!(screen_rows(&terminal)
+            .pop()
+            .unwrap()
+            .contains("Enter:download"));
+        assert_eq!(
+            key(&mut picker, &mut app, KeyCode::Enter),
+            Outcome::Copy("result-00.md".to_string())
+        );
     }
 
     #[test]

@@ -65,7 +65,11 @@ fn run() -> Result<()> {
                 let refreshed = read_picker(&mut client, &pane_id, Path::new(&socket_path));
                 apply_refresh(&mut app, &mut picker, &mut pane_cwd, refreshed);
             }
-            Event::Mouse(mouse) => picker.handle_mouse(mouse),
+            Event::Mouse(mouse) => {
+                if picker.handle_mouse(mouse) {
+                    app.message = None;
+                }
+            }
             _ => {}
         }
     };
@@ -142,7 +146,7 @@ fn read_picker(
         .ok()
         .map(visible_wrap_width);
     if source_cwd::read(socket_path, pane_id)? != pane_cwd {
-        bail!("source directory changed while reading; refresh again");
+        bail!("source directory changed while reading; reopen the picker");
     }
     let (app, picker) = build_picker(&text, &pane_cwd, width)?;
     Ok((app, picker, pane_cwd))

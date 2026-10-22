@@ -8,6 +8,8 @@ use ratatui::text::{Line, Span};
 /// Insert hints beside accepted paths, preserving every original source
 /// character. Match positions count Unicode characters in the source snapshot;
 /// only the final wrapping step converts them to terminal cell widths.
+/// Captured terminal row breaks are preserved: without soft-wrap metadata,
+/// joining them could change code or prose. A narrower panel may wrap them again.
 pub(crate) fn render_rows(app: &App, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
