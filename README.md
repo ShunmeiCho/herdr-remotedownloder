@@ -241,16 +241,39 @@ whence -w hr
 
 ### Select a visible file path
 
-Press `prefix+d` to add hint characters to existing file paths on the visible
-screen. Type a hint to transfer that file to the Mac. Press Esc to close the
-picker. Opening the picker switches the connected Mac to an ASCII-capable input
-source (such as ABC), so hints can be typed even while a Japanese or other input
-method is active.
+Press `prefix+d` to open one download overlay with two views. The left view
+(about 70% of the width) is a read-only conversation snapshot. Existing paths
+are highlighted and labelled `[a]`, `[s]`, and so on without replacing path
+characters. The narrower right view lists complete resolved paths with the
+same hints. Small terminals stack the views.
 
-To transfer several files at once, press Tab, type the hints of each file
-(typing a hint again deselects it), then press Tab or Enter. Files are sent one
-after another. During each transfer the picker shows the file number,
-percentage, and sent bytes.
+- Left/Right or a mouse click chooses the active view.
+- In the file list, Up/Down selects a file and Enter downloads it. PageUp,
+  PageDown, Home and End move the selection and keep it visible.
+- Shift+Up/Down scrolls the focused path itself when it is taller than the
+  file viewport; its hint stays pinned in the title.
+- In the conversation snapshot, those navigation keys scroll the text.
+- Typing a file's hint still downloads it directly.
+- Tab starts multi-select. Type hints or press Space on the focused file to
+  toggle selections; Tab or Enter downloads the selected files in order.
+
+Esc closes the download overlay. Both views belong to the picker, so clicking
+and scrolling the snapshot does not direct keys to the original agent. The
+original pane receives focus again after the overlay closes. Opening the
+picker switches the connected Mac to an ASCII-capable input source (such as
+ABC), so hints can be typed while another input method is active.
+
+The snapshot and candidate list are captured once when the picker opens.
+Scrolling does not add/remove candidates or change their hints: paths outside
+the scrolled viewport remain in the list. New output from the underlying agent
+is included only when you click **Refresh** (or press Ctrl+R), or close and
+reopen the picker. Refresh reads the source pane's current visible page and
+rebuilds both views. Hints may change and pending hint input and multi-selections
+are cleared; a failed refresh keeps the old snapshot and selection. Scrolling
+alone never changes the candidates. The snapshot shows conversation text, not
+file contents.
+
+During a transfer the picker shows the file number, percentage and sent bytes.
 
 The picker recognizes absolute paths, paths relative to the pane's current
 working directory, and paths ending in `:line` or `:line:column`. It works with
